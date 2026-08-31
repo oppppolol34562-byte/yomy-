@@ -75,12 +75,14 @@ export default function Create() {
       }).select('id').single()
       if (draftError || !draft) throw draftError || new Error('Could not create post draft')
 
+      URL.revokeObjectURL(localPreviewUrl)
       setMediaUrl(publicUrl)
       setMediaType(nextMediaType)
       setPostId(draft.id)
       setStep('compose')
     } catch (error: unknown) {
       toast.error(error instanceof Error ? error.message : 'Upload failed')
+      URL.revokeObjectURL(localPreviewUrl)
       setStep('select')
       setMediaUrl('')
     }
@@ -129,7 +131,7 @@ export default function Create() {
 
       if (finalTags.length) {
         const { error: tagError } = await supabase.from('post_tags').insert(finalTags.map(tag => ({ post_id: postId, tag })))
-        if (tagError) console.error('Failed to save tags:', tagError)
+        if (tagError) toast.error('Post shared, but tags could not be saved')
       }
       toast.success('Post shared!')
       navigate('/')
