@@ -48,12 +48,20 @@ export default function CreateStory() {
     try {
       const hours = parseInt(expiration)
       const expiresAt = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString()
-      const { error } = await supabase.from('stories').insert({ user_id: user.id, media_url: mediaUrl, media_type: mediaType, caption: caption.trim(), visibility: profile?.is_private ? 'followers' : visibility, expires_at: expiresAt })
+      const storyPayload = { user_id: user.id, media_url: mediaUrl, media_type: mediaType, caption: caption.trim(), visibility: profile?.is_private ? 'followers' : visibility, expires_at: expiresAt }
+      let { error } = await supabase.from('stories').insert(storyPayload)
+      if (error && (error.code === '42703' || error.message?.toLowerCase().includes('visibility'))) {
+        const { visibility: _legacyVisibility, ...legacyStoryPayload } = storyPayload
+        const retry = await supabase.from('stories').insert(legacyStoryPayload)
+        error = retry.error
+      }
       if (error) throw error
       toast.success('Story posted!')
       navigate('/')
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Failed to post story')
+      const message = err instanceof Error ? err.message : String((err as { message?: unknown })?.message || 'Unknown error')
+      console.error('Failed to post story:', err)
+      toast.error('Failed to post story: ' + message)
     } finally { setPosting(false) }
   }
 
