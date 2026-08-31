@@ -149,14 +149,15 @@ export default function Chat() {
       const { error: uploadError } = await supabase.storage.from('messages').upload(path, file, { upsert: false, contentType: file.type || 'application/octet-stream' })
       if (uploadError) throw uploadError
       const { data: publicData } = supabase.storage.from('messages').getPublicUrl(path)
-      await sendMessage('', path, mediaType, file.name, file.size, file.type || 'application/octet-stream', path, publicData.publicUrl)
+      const sent = await sendMessage('', path, mediaType, file.name, file.size, file.type || 'application/octet-stream', path, publicData.publicUrl)
+      if (!sent) throw new Error('Attachment uploaded, but the message could not be saved')
       if (fileRef.current) fileRef.current.value = ''
       toast.success('Attachment sent')
     } catch (error: unknown) { toast.error(error instanceof Error ? error.message : 'Upload failed') }
     finally { setUploadingMedia(false) }
   }
 
-  const sendMessage = async (content?: string, mediaUrl?: string, mediaType?: Message['media_type'], attachmentName?: string, attachmentSize?: number, attachmentMimeType?: string, storagePath?: string, fallbackMediaUrl?: string) => {
+  const sendMessage = async (content?: string, mediaUrl?: string, mediaType?: Message['media_type'], attachmentName?: string, attachmentSize?: number, attachmentMimeType?: string, storagePath?: string, fallbackMediaUrl?: string): Promise<boolean> => {
     if (!user || !otherUser || !canMessage) return
     const messageContent = content ?? newMessage
     if (!messageContent.trim() && !mediaUrl) return
@@ -183,10 +184,12 @@ export default function Chat() {
           void supabase.functions.invoke('send-message-push', { body: { messageId: data.id, recipientId: otherUser.id } })
         }
       }
+      return true
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String((error as { message?: unknown })?.message || 'Unknown error')
       console.error('Failed to send message:', error)
       toast.error('Failed to send: ' + message)
+      return false
     }
     finally { setSending(false) }
   }
