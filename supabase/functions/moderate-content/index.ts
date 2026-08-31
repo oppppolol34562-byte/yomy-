@@ -200,6 +200,7 @@ async function processModeration(request: ModerationRequest, userId: string): Pr
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+  return json({ status: "disabled", safe: true, message: "Content moderation is disabled for Yomy." });
   let moderationPostId = '';
   let moderationUserId = '';
   let moderationStoragePath: string | undefined;
