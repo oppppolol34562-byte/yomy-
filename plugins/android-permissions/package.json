@@ -1,0 +1,13 @@
+{
+  "name": "@yomy/android-permissions",
+  "version": "1.0.0",
+  "private": true,
+  "files": [
+    "android"
+  ],
+  "capacitor": {
+    "android": {
+      "src": "android"
+    }
+  }
+}

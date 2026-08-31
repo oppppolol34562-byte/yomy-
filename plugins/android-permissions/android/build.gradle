@@ -1,0 +1,25 @@
+apply plugin: 'com.android.library'
+
+ext {
+    firebaseMessagingVersion = project.hasProperty('firebaseMessagingVersion') ? rootProject.ext.firebaseMessagingVersion : '25.0.1'
+    androidxCoreVersion = project.hasProperty('androidxCoreVersion') ? rootProject.ext.androidxCoreVersion : '1.17.0'
+}
+
+android {
+    namespace "com.yomy.permissions"
+    compileSdk rootProject.ext.compileSdkVersion
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    implementation "com.google.firebase:firebase-messaging:${firebaseMessagingVersion}"
+    implementation "androidx.core:core:${androidxCoreVersion}"
+}
