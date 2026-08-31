@@ -10,7 +10,7 @@ declare global {
 
 // The Capacitor plugin calls Firebase natively. Without google-services.json,
 // register() can terminate Android instead of returning a rejected Promise.
-// The build workflow enables this only when Firebase is configured.
+// Enable this only in builds that also package google-services.json.
 const PUSH_NOTIFICATIONS_ENABLED = import.meta.env.VITE_YOMY_PUSH_NOTIFICATIONS === 'true'
 
 function openNotificationUrl(value: unknown) {
