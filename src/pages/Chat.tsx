@@ -158,9 +158,9 @@ export default function Chat() {
   }
 
   const sendMessage = async (content?: string, mediaUrl?: string, mediaType?: Message['media_type'], attachmentName?: string, attachmentSize?: number, attachmentMimeType?: string, storagePath?: string, fallbackMediaUrl?: string): Promise<boolean> => {
-    if (!user || !otherUser || !canMessage) return
+    if (!user || !otherUser || !canMessage) return false
     const messageContent = content ?? newMessage
-    if (!messageContent.trim() && !mediaUrl) return
+    if (!messageContent.trim() && !mediaUrl) return false
     setSending(true)
     try {
       if (editingId) {
