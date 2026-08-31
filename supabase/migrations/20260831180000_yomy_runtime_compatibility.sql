@@ -44,8 +44,13 @@ DROP POLICY IF EXISTS "post_tags_select" ON public.post_tags;
 CREATE POLICY "post_tags_select" ON public.post_tags FOR SELECT TO authenticated USING (public.can_view_post(auth.uid(), post_id));
 
 -- Keep all attachment types used by the app valid in the database.
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS storage_path text;
+UPDATE public.messages SET storage_path = regexp_replace(media_url, '^.*/storage/v1/object/public/messages/', '') WHERE COALESCE(storage_path, '') = '' AND media_url LIKE '%/storage/v1/object/public/messages/%';
 ALTER TABLE public.messages DROP CONSTRAINT IF EXISTS messages_media_type_check;
 ALTER TABLE public.messages ADD CONSTRAINT messages_media_type_check CHECK (media_type IN ('', 'image', 'video', 'audio', 'document', 'apk', 'file'));
+
+-- New message attachments are private. Existing public URLs are converted to paths above.
+INSERT INTO storage.buckets (id, name, public) VALUES ('messages', 'messages', false) ON CONFLICT (id) DO UPDATE SET public = false;
 
 -- Atomically consume a view-once attachment. Only the recipient can open it, and only once.
 CREATE OR REPLACE FUNCTION public.open_view_once_message(p_message_id uuid)
@@ -57,10 +62,10 @@ BEGIN
   WHERE id = p_message_id
     AND receiver_id = auth.uid()
     AND view_once = true
-    AND view_once_opened = false
+    AND COALESCE(view_once_opened, false) = false
   RETURNING * INTO opened_message;
   IF NOT FOUND THEN RETURN jsonb_build_object('opened', false); END IF;
-  RETURN jsonb_build_object('opened', true, 'media_url', opened_message.media_url, 'media_type', opened_message.media_type);
+  RETURN jsonb_build_object('opened', true, 'media_url', opened_message.media_url, 'storage_path', opened_message.storage_path, 'media_type', opened_message.media_type);
 END;
 $$;
 REVOKE ALL ON FUNCTION public.open_view_once_message(uuid) FROM PUBLIC;
