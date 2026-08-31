@@ -131,6 +131,7 @@ export type Message = {
   receiver_id: string
   content: string
   media_url: string
+  storage_path: string | null
   media_type: '' | 'image' | 'video' | 'audio' | 'document' | 'apk' | 'file'
   attachment_name: string | null
   attachment_size: number | null
