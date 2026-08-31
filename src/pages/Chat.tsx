@@ -83,7 +83,7 @@ export default function Chat() {
     const { data } = await supabase.from('messages').select('*').or('and(sender_id.eq.' + user.id + ',receiver_id.eq.' + otherUser.id + '),and(sender_id.eq.' + otherUser.id + ',receiver_id.eq.' + user.id + ')').is('deleted_at', null).order('created_at', { ascending: true }).limit(200)
     const visible = (data || []).filter(message => message.sender_id === user.id ? !message.deleted_for_sender : !message.deleted_for_receiver) as Message[]
     const hydrated = await Promise.all(visible.map(async message => {
-      if (message.view_once && !message.view_once_opened) return { ...message, media_url: '' }
+      if (message.view_once && !message.view_once_opened && message.storage_path) return { ...message, media_url: '' }
       if (!message.storage_path) return message
       const { data: signedData } = await supabase.storage.from('messages').createSignedUrl(message.storage_path, 3600)
       return { ...message, media_url: signedData?.signedUrl || '' }
@@ -148,14 +148,15 @@ export default function Chat() {
       const path = user.id + '/' + crypto.randomUUID() + '-' + safeName
       const { error: uploadError } = await supabase.storage.from('messages').upload(path, file, { upsert: false, contentType: file.type || 'application/octet-stream' })
       if (uploadError) throw uploadError
-      await sendMessage('', path, mediaType, file.name, file.size, file.type || 'application/octet-stream', path)
+      const { data: publicData } = supabase.storage.from('messages').getPublicUrl(path)
+      await sendMessage('', path, mediaType, file.name, file.size, file.type || 'application/octet-stream', path, publicData.publicUrl)
       if (fileRef.current) fileRef.current.value = ''
       toast.success('Attachment sent')
     } catch (error: unknown) { toast.error(error instanceof Error ? error.message : 'Upload failed') }
     finally { setUploadingMedia(false) }
   }
 
-  const sendMessage = async (content?: string, mediaUrl?: string, mediaType?: Message['media_type'], attachmentName?: string, attachmentSize?: number, attachmentMimeType?: string, storagePath?: string) => {
+  const sendMessage = async (content?: string, mediaUrl?: string, mediaType?: Message['media_type'], attachmentName?: string, attachmentSize?: number, attachmentMimeType?: string, storagePath?: string, fallbackMediaUrl?: string) => {
     if (!user || !otherUser || !canMessage) return
     const messageContent = content ?? newMessage
     if (!messageContent.trim() && !mediaUrl) return
@@ -166,14 +167,27 @@ export default function Chat() {
         if (error) throw error
         setMessages(previous => previous.map(message => message.id === editingId ? data as Message : message)); setEditingId(null); setNewMessage('')
       } else {
-        const { data, error } = await supabase.from('messages').insert({ sender_id: user.id, receiver_id: otherUser.id, content: messageContent.trim(), media_url: mediaUrl || '', storage_path: storagePath || null, media_type: mediaType || '', attachment_name: attachmentName || null, attachment_size: attachmentSize || null, attachment_mime_type: attachmentMimeType || null, reply_to_id: replyTo?.id || null, is_encrypted: true, view_once: viewOnceMode && !!mediaUrl && (mediaType === 'image' || mediaType === 'video') }).select('*').single()
+        const insertPayload: Record<string, unknown> = { sender_id: user.id, receiver_id: otherUser.id, content: messageContent.trim(), media_url: mediaUrl || '', media_type: mediaType || '', attachment_name: attachmentName || null, attachment_size: attachmentSize || null, attachment_mime_type: attachmentMimeType || null, reply_to_id: replyTo?.id || null, is_encrypted: true, view_once: viewOnceMode && !!mediaUrl && (mediaType === 'image' || mediaType === 'video') }
+        if (storagePath) insertPayload.storage_path = storagePath
+        let { data, error } = await supabase.from('messages').insert(insertPayload).select('*').single()
+        if (error && storagePath && (error.code === '42703' || error.message?.toLowerCase().includes('storage_path'))) {
+          delete insertPayload.storage_path
+          insertPayload.media_url = fallbackMediaUrl || mediaUrl || ''
+          const retry = await supabase.from('messages').insert(insertPayload).select('*').single()
+          data = retry.data
+          error = retry.error
+        }
         if (error) throw error
         if (data) {
           if (storagePath) void fetchMessages(); else setMessages(previous => [...previous, data as Message]); setNewMessage(''); setReplyTo(null); setViewOnceMode(false)
           void supabase.functions.invoke('send-message-push', { body: { messageId: data.id, recipientId: otherUser.id } })
         }
       }
-    } catch (error: unknown) { toast.error(error instanceof Error ? error.message : 'Failed to send') }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String((error as { message?: unknown })?.message || 'Unknown error')
+      console.error('Failed to send message:', error)
+      toast.error('Failed to send: ' + message)
+    }
     finally { setSending(false) }
   }
 
@@ -192,7 +206,12 @@ export default function Chat() {
   }
   const openViewOnce = async (message: Message) => {
     if (!user || message.sender_id === user.id || !message.view_once || message.view_once_opened) return
-    const { data, error } = await supabase.rpc('open_view_once_message', { p_message_id: message.id })
+    let { data, error } = await supabase.rpc('open_view_once_message', { p_message_id: message.id })
+    if (error && (error.code === '42883' || error.message?.toLowerCase().includes('open_view_once_message'))) {
+      const legacy = await supabase.from('messages').update({ view_once_opened: true }).eq('id', message.id).eq('receiver_id', user.id).eq('view_once', true).eq('view_once_opened', false).select('media_url').maybeSingle()
+      data = legacy.data ? { opened: true, media_url: legacy.data.media_url } : null
+      error = legacy.error
+    }
     const opened = data as { opened?: boolean; media_url?: string; storage_path?: string | null } | null
     const mediaPath = opened?.storage_path || opened?.media_url
     if (error || !opened?.opened || !mediaPath) {
@@ -253,7 +272,7 @@ export default function Chat() {
       </div>{messageReactions.length > 0 && <div className={cn('mt-[-5px] flex flex-wrap gap-1', isMe ? 'justify-end' : 'justify-start')}>{Array.from(new Set(messageReactions)).map(emoji => <button type="button" key={emoji} onClick={() => void toggleReaction(msg, emoji)} className="rounded-full border border-border bg-background px-1.5 py-0.5 text-xs shadow-sm">{emoji} {messageReactions.filter(item => item === emoji).length}</button>)}</div>}{actionMessageId === msg.id && !selectionMode && <div className="mt-2 flex flex-wrap items-center gap-1 rounded-2xl border border-border bg-background/95 p-1.5 shadow-xl backdrop-blur"><div className="flex items-center gap-0.5">{REACTION_EMOJIS.map(emoji => <button type="button" key={emoji} onClick={() => void toggleReaction(msg, emoji)} className="flex size-8 items-center justify-center rounded-full text-lg hover:bg-muted">{emoji}</button>)}</div><Button variant="ghost" size="sm" onClick={() => { setReplyTo(msg); setActionMessageId(null) }}><Reply className="mr-1 size-4" />Reply</Button>{isMe && !msg.media_url && !msg.view_once && <Button variant="ghost" size="sm" onClick={() => startEdit(msg)}><Pencil className="mr-1 size-4" />Edit</Button>}<Button variant="ghost" size="sm" onClick={() => void deleteMessage(msg, 'me')}><Trash2 className="mr-1 size-4" />Delete for me</Button>{isMe && <Button variant="ghost" size="sm" className="text-destructive" onClick={() => void deleteMessage(msg, 'everyone')}><Trash2 className="mr-1 size-4" />Everyone</Button>}<Button variant="ghost" size="icon" onClick={() => setActionMessageId(null)}><X className="size-4" /></Button></div>}</div></div></div>
     })}</div>
 
-    <div className="shrink-0 border-t border-border bg-background/95 px-3 pt-2 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur-xl">{replyTo && <div className="mx-auto mb-2 flex max-w-2xl items-center gap-2 rounded-xl border border-border bg-muted/50 px-3 py-2 text-xs"><Reply className="size-4 shrink-0 text-cyan-400" /><div className="min-w-0 flex-1"><p className="font-semibold">Replying to {replyTo.sender_id === user?.id ? 'yourself' : otherUser.username}</p><p className="truncate text-muted-foreground">{replyTo.content || 'Attachment'}</p></div><Button variant="ghost" size="icon" className="size-7" onClick={() => setReplyTo(null)}><X className="size-4" /></Button></div>}{editingId && <div className="mx-auto mb-2 flex max-w-2xl items-center gap-2 rounded-xl border border-border bg-muted/50 px-3 py-2 text-xs"><Pencil className="size-4 shrink-0 text-violet-400" /><span className="flex-1">Editing message</span><Button variant="ghost" size="icon" className="size-7" onClick={() => { setEditingId(null); setNewMessage('') }}><X className="size-4" /></Button></div>}{!canMessage ? <p className="mx-auto text-center text-sm text-muted-foreground">{otherUser.username} only accepts messages from approved followers.</p> : <div className="mx-auto flex w-full max-w-2xl items-center gap-2"><input ref={fileRef} type="file" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt,.zip,.apk,application/*" className="hidden" onChange={event => { const file = event.target.files?.[0]; if (file) void uploadMedia(file) }} /><Button variant="ghost" size="icon" className="size-9 shrink-0" onClick={() => fileRef.current?.click()} disabled={uploadingMedia || sending}><ImagePlus className="size-5" /></Button><Button variant="ghost" size="icon" className={cn('size-9 shrink-0', viewOnceMode && 'text-primary')} onClick={() => { setViewOnceMode(!viewOnceMode); toast.info(viewOnceMode ? 'View-once off' : 'View-once on') }} disabled={uploadingMedia}><Eye className="size-5" /></Button><Button variant="ghost" size="icon" className={cn('size-9 shrink-0', recording && 'animate-pulse text-red-500')} onClick={recording ? stopRecording : startRecording} disabled={uploadingMedia || sending}>{recording ? <><Square className="size-4 fill-current" /><span className="sr-only">Recording {recordingSeconds} seconds</span></> : <Mic className="size-5" />}</Button><Input placeholder={editingId ? 'Edit message...' : 'Message...'} value={newMessage} onChange={event => setNewMessage(event.target.value)} onKeyDown={event => event.key === 'Enter' && !sending && void sendMessage()} className="flex-1" disabled={sending} /><Button size="icon" className="size-9 shrink-0" disabled={(!newMessage.trim() && !editingId) || sending} onClick={() => void sendMessage()}>{sending ? <Spinner className="size-4" /> : <Send className="size-4" />}</Button></div>}</div>
+    <div className="shrink-0 border-t border-border bg-background/95 px-3 pt-2 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur-xl">{replyTo && <div className="mx-auto mb-2 flex max-w-2xl items-center gap-2 rounded-xl border border-border bg-muted/50 px-3 py-2 text-xs"><Reply className="size-4 shrink-0 text-cyan-400" /><div className="min-w-0 flex-1"><p className="font-semibold">Replying to {replyTo.sender_id === user?.id ? 'yourself' : otherUser.username}</p><p className="truncate text-muted-foreground">{replyTo.content || 'Attachment'}</p></div><Button variant="ghost" size="icon" className="size-7" onClick={() => setReplyTo(null)}><X className="size-4" /></Button></div>}{editingId && <div className="mx-auto mb-2 flex max-w-2xl items-center gap-2 rounded-xl border border-border bg-muted/50 px-3 py-2 text-xs"><Pencil className="size-4 shrink-0 text-violet-400" /><span className="flex-1">Editing message</span><Button variant="ghost" size="icon" className="size-7" onClick={() => { setEditingId(null); setNewMessage('') }}><X className="size-4" /></Button></div>}{!canMessage ? <p className="mx-auto text-center text-sm text-muted-foreground">{otherUser.username} only accepts messages from approved followers.</p> : <div className="mx-auto flex w-full max-w-2xl items-center gap-2"><input ref={fileRef} type="file" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt,.zip,.apk,application/*" className="hidden" onChange={event => { const file = event.target.files?.[0]; if (file) void uploadMedia(file) }} /><Button variant="ghost" size="icon" className="size-9 shrink-0" onClick={() => fileRef.current?.click()} disabled={uploadingMedia || sending}><ImagePlus className="size-5" /></Button><Button variant="ghost" size="icon" className={cn('relative size-9 shrink-0', viewOnceMode ? 'bg-primary/20 text-primary ring-2 ring-primary' : 'text-muted-foreground')} aria-pressed={viewOnceMode} title={viewOnceMode ? 'View once: ON' : 'View once: OFF'} onClick={() => { setViewOnceMode(!viewOnceMode); toast.info(viewOnceMode ? 'View-once off' : 'View-once on') }} disabled={uploadingMedia}><Eye className="size-5" />{viewOnceMode && <span className="absolute -right-1 -top-1 rounded-full bg-primary px-1 text-[8px] font-bold text-primary-foreground">1x</span>}</Button><Button variant="ghost" size="icon" className={cn('size-9 shrink-0', recording && 'animate-pulse text-red-500')} onClick={recording ? stopRecording : startRecording} disabled={uploadingMedia || sending}>{recording ? <><Square className="size-4 fill-current" /><span className="sr-only">Recording {recordingSeconds} seconds</span></> : <Mic className="size-5" />}</Button><Input placeholder={editingId ? 'Edit message...' : 'Message...'} value={newMessage} onChange={event => setNewMessage(event.target.value)} onKeyDown={event => event.key === 'Enter' && !sending && void sendMessage()} className="flex-1" disabled={sending} /><Button size="icon" className="size-9 shrink-0" disabled={(!newMessage.trim() && !editingId) || sending} onClick={() => void sendMessage()}>{sending ? <Spinner className="size-4" /> : <Send className="size-4" />}</Button></div>}</div>
 
     {showViewOnce && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black" onClick={() => setShowViewOnce(null)}>{showViewOnce.type === 'video' ? <video src={showViewOnce.url} autoPlay controls playsInline className="max-h-full max-w-full object-contain" /> : <img src={showViewOnce.url} alt="" className="max-h-full max-w-full object-contain" />}<Button variant="ghost" className="absolute right-4 top-4 text-white" size="icon" onClick={() => setShowViewOnce(null)}><X className="size-6" /></Button></div>}
     {previewMedia && <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/95 p-4" onClick={() => setPreviewMedia(null)}><div className="flex w-full max-w-3xl justify-end pb-3"><Button variant="ghost" size="icon" className="text-white" onClick={() => setPreviewMedia(null)}><X className="size-6" /></Button></div><div className="flex min-h-0 max-h-[78vh] w-full items-center justify-center" onClick={event => event.stopPropagation()}>{previewMedia.type === 'video' ? <video src={previewMedia.url} controls autoPlay playsInline className="max-h-[78vh] max-w-full rounded-xl" /> : <img src={previewMedia.url} alt="" className="max-h-[78vh] max-w-full rounded-xl object-contain" />}</div><a href={downloadUrl(previewMedia.url, previewMedia.name)} download={previewMedia.name} target="_blank" rel="noreferrer" className="mt-4 flex items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black"><Download className="size-4" />Download</a></div>}
