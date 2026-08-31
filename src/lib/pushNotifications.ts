@@ -8,12 +8,17 @@ declare global {
   }
 }
 
+// The Capacitor plugin calls Firebase natively. Without google-services.json,
+// register() can terminate Android instead of returning a rejected Promise.
+// The build workflow enables this only when Firebase is configured.
+const PUSH_NOTIFICATIONS_ENABLED = import.meta.env.VITE_YOMY_PUSH_NOTIFICATIONS === 'true'
+
 function openNotificationUrl(value: unknown) {
   if (typeof value === 'string' && value.startsWith('/')) window.location.assign(value)
 }
 
 export async function registerPushNotifications(userId: string): Promise<() => Promise<void>> {
-  if (!Capacitor.isNativePlatform()) return async () => {}
+  if (!Capacitor.isNativePlatform() || !PUSH_NOTIFICATIONS_ENABLED) return async () => {}
   try {
     if (Capacitor.getPlatform() === 'android') {
       await PushNotifications.createChannel({
