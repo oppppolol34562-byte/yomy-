@@ -47,45 +47,19 @@ export default function Create() {
   const [tags, setTags] = useState<string[]>([])
   const [postId, setPostId] = useState<string | null>(null)
 
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+
   const uploadMedia = async (file: File) => {
-    if (!user) return
+    if (!user) {
+      toast.error('You must be signed in to create a post')
+      return
+    }
     const localPreviewUrl = URL.createObjectURL(file)
     const isVideo = file.type.startsWith('video/')
     setMediaUrl(localPreviewUrl)
     setMediaType(isVideo ? 'video' : 'image')
-    setStep('uploading')
-    try {
-      const folder = isVideo ? 'videos' : 'images'
-      const ext = file.name.split('.').pop()?.toLowerCase() || (isVideo ? 'mp4' : 'jpg')
-      const path = folder + '/' + user.id + '-' + crypto.randomUUID() + '.' + ext
-      const { error: uploadError } = await supabase.storage.from('posts').upload(path, file, { upsert: false })
-      if (uploadError) throw uploadError
-
-      const { data: publicData } = supabase.storage.from('posts').getPublicUrl(path)
-      const publicUrl = publicData.publicUrl
-      const nextMediaType = isVideo ? 'video' : 'image'
-      const { data: draft, error: draftError } = await supabase.from('posts').insert({
-        user_id: user.id,
-        media_url: publicUrl,
-        media_type: nextMediaType,
-        status: 'draft',
-        moderation_status: 'safe',
-        moderation_result: {},
-        publish_requested: false,
-      }).select('id').single()
-      if (draftError || !draft) throw draftError || new Error('Could not create post draft')
-
-      URL.revokeObjectURL(localPreviewUrl)
-      setMediaUrl(publicUrl)
-      setMediaType(nextMediaType)
-      setPostId(draft.id)
-      setStep('compose')
-    } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : 'Upload failed')
-      URL.revokeObjectURL(localPreviewUrl)
-      setStep('select')
-      setMediaUrl('')
-    }
+    setUploadFile(file)
+    setStep('compose')
   }
 
   const addTagsFromInput = () => {
@@ -107,15 +81,42 @@ export default function Create() {
   }
 
   const handlePost = async () => {
-    if (!user || !mediaUrl || !postId || posting) return
+    if (!user || !mediaUrl || posting) return
     const finalTags = [...tags]
     const pendingTag = normalizeTag(tagInput).slice(0, MAX_TAG_LENGTH)
     if (pendingTag && !finalTags.includes(pendingTag) && finalTags.length < MAX_TAGS) finalTags.push(pendingTag)
     setTags(finalTags)
     setTagInput('')
     setPosting(true)
+
     try {
-      const { error: updateError } = await supabase.from('posts').update({
+      let finalPublicUrl = mediaUrl
+
+      // If we have a local File object to upload
+      if (uploadFile) {
+        const isVideo = uploadFile.type.startsWith('video/')
+        const folder = isVideo ? 'videos' : 'images'
+        const ext = uploadFile.name.split('.').pop()?.toLowerCase() || (isVideo ? 'mp4' : 'jpg')
+        const path = folder + '/' + user.id + '-' + Date.now() + '-' + crypto.randomUUID().slice(0, 8) + '.' + ext
+
+        const { error: uploadError } = await supabase.storage
+          .from('posts')
+          .upload(path, uploadFile, { upsert: true })
+
+        if (uploadError) {
+          throw new Error('Storage upload failed: ' + uploadError.message)
+        }
+
+        const { data: publicData } = supabase.storage.from('posts').getPublicUrl(path)
+        finalPublicUrl = publicData.publicUrl
+      }
+
+      // Create or update post
+      const nextMediaType = uploadFile ? (uploadFile.type.startsWith('video/') ? 'video' : 'image') : mediaType
+      const postPayload = {
+        user_id: user.id,
+        media_url: finalPublicUrl,
+        media_type: nextMediaType,
         title: title.trim(),
         caption: caption.trim(),
         description: description.trim(),
@@ -126,16 +127,37 @@ export default function Create() {
         moderation_result: {},
         publish_requested: true,
         published_at: new Date().toISOString(),
-      }).eq('id', postId).eq('user_id', user.id).select('id').single()
-      if (updateError) throw updateError
+      }
 
-      if (finalTags.length) {
-        const { error: tagError } = await supabase.from('post_tags').insert(finalTags.map(tag => ({ post_id: postId, tag })))
+      let createdPostId = postId
+      if (createdPostId) {
+        const { error: updateError } = await supabase
+          .from('posts')
+          .update(postPayload)
+          .eq('id', createdPostId)
+          .eq('user_id', user.id)
+        if (updateError) throw updateError
+      } else {
+        const { data: newPost, error: insertError } = await supabase
+          .from('posts')
+          .insert(postPayload)
+          .select('id')
+          .single()
+        if (insertError || !newPost) throw insertError || new Error('Could not create post')
+        createdPostId = newPost.id
+      }
+
+      if (finalTags.length && createdPostId) {
+        const { error: tagError } = await supabase
+          .from('post_tags')
+          .insert(finalTags.map(tag => ({ post_id: createdPostId, tag })))
         if (tagError) toast.error('Post shared, but tags could not be saved')
       }
+
       toast.success('Post shared!')
       navigate('/')
     } catch (error: unknown) {
+      console.error('Create post error:', error)
       toast.error(error instanceof Error ? error.message : 'Failed to share post')
     } finally {
       setPosting(false)
@@ -144,6 +166,7 @@ export default function Create() {
 
   const resetMedia = () => {
     setMediaUrl('')
+    setUploadFile(null)
     setPostId(null)
     setStep('select')
     setTags([])

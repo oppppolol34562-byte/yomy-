@@ -291,18 +291,20 @@ export default function PostCard({ post, onDeleted }: PostCardProps) {
     <article className="border-b border-border bg-card pb-3 text-card-foreground">
       {/* Post Header */}
       <div className="flex items-center justify-between px-3 py-2.5">
-        <Link to={`/profile/${authorName}`} className="flex items-center gap-2.5 group">
-          <Avatar className="size-9 ring-1 ring-border group-hover:ring-primary transition-all">
-            <AvatarImage src={author?.avatar_url} alt={authorName} />
-            <AvatarFallback className="bg-primary/10 text-primary font-semibold text-xs">
-              {authorName[0]?.toUpperCase()}
-            </AvatarFallback>
-          </Avatar>
+        <div className="flex items-center gap-2.5">
+          <Link to={`/profile/${authorName}`} className="group block shrink-0">
+            <Avatar className="size-9 ring-1 ring-border group-hover:ring-primary transition-all">
+              <AvatarImage src={author?.avatar_url} alt={authorName} />
+              <AvatarFallback className="bg-primary/10 text-primary font-semibold text-xs">
+                {authorName[0]?.toUpperCase()}
+              </AvatarFallback>
+            </Avatar>
+          </Link>
           <div className="flex flex-col">
             <div className="flex items-center gap-1.5">
-              <span className="text-sm font-semibold leading-tight group-hover:underline">
+              <Link to={`/profile/${authorName}`} className="text-sm font-semibold leading-tight hover:underline text-foreground">
                 {authorName}
-              </span>
+              </Link>
               {author?.is_verified && (
                 <span className="inline-flex items-center justify-center size-3.5 rounded-full bg-blue-500 text-white text-[9px] font-bold">
                   <Check className="size-2.5 stroke-[3]" />
@@ -316,7 +318,7 @@ export default function PostCard({ post, onDeleted }: PostCardProps) {
               {timeAgo}
             </Link>
           </div>
-        </Link>
+        </div>
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
