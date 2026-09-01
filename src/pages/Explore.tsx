@@ -201,7 +201,7 @@ export default function Explore() {
                   {searchPosts.map(post => (
                     <Link
                       key={post.id}
-                      to={`/profile/${post.profiles?.username}`}
+                      to={`/post/${post.id}`}
                       className="aspect-square relative group"
                     >
                       <img src={post.media_url} alt="" className="w-full h-full object-cover" loading="lazy" />
@@ -241,7 +241,7 @@ export default function Explore() {
                   {posts.map(post => (
                     <Link
                       key={post.id}
-                      to={`/profile/${post.profiles?.username}`}
+                      to={`/post/${post.id}`}
                       className="aspect-square relative group"
                     >
                       <img

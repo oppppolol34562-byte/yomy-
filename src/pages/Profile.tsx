@@ -36,6 +36,8 @@ export default function Profile() {
   const [followerList, setFollowerList] = useState<ProfileType[]>([])
   const [followingList, setFollowingList] = useState<ProfileType[]>([])
 
+  const [savedPosts, setSavedPosts] = useState<Post[]>([])
+
   const isOwner = user?.id === profile?.id
 
   const fetchProfile = useCallback(async () => {
@@ -53,7 +55,7 @@ export default function Profile() {
     }
     setProfile(prof)
 
-    // RLS filters visibility. Owners can also see their own pending posts.
+    // Fetch posts
     let postsQuery = supabase
       .from('posts')
       .select('*, profiles!user_id(id, username, full_name, avatar_url, is_verified, is_private), likes(user_id), comments(id), post_tags(tag)')
@@ -64,7 +66,7 @@ export default function Profile() {
     }
 
     const { data: postData } = await postsQuery
-      .order('published_at', { ascending: false })
+      .order('created_at', { ascending: false })
 
     setPosts((postData || []).map(p => ({
       ...p,
@@ -73,6 +75,19 @@ export default function Profile() {
       _liked_by_me: p.likes?.some((l: { user_id: string }) => l.user_id === user?.id) || false,
       _tags: p.post_tags?.map((t: { tag: string }) => t.tag) || [],
     })))
+
+    // Fetch saved posts if owner
+    if (user && user.id === prof.id) {
+      const { data: savedData } = await supabase
+        .from('saved_posts')
+        .select('post_id, posts!inner(*, profiles!user_id(id, username, full_name, avatar_url, is_verified))')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+
+      if (savedData) {
+        setSavedPosts(savedData.map(s => s.posts as unknown as Post).filter(Boolean))
+      }
+    }
 
     // Check follow status
     if (user && !isOwner) {
@@ -346,25 +361,63 @@ export default function Profile() {
           </TabsContent>
 
           <TabsContent value="reels">
-            <Empty className="mt-12">
-              <EmptyHeader>
-                <EmptyTitle>No reels yet</EmptyTitle>
-              </EmptyHeader>
-            </Empty>
+            {posts.filter(p => p.media_type === 'video').length === 0 ? (
+              <Empty className="mt-12">
+                <EmptyHeader>
+                  <EmptyTitle>No reels or videos yet</EmptyTitle>
+                  <EmptyDescription>
+                    {isOwner ? "Share a video post to see it here." : `${profile.username} hasn't posted any videos.`}
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : (
+              <div className="grid grid-cols-3 gap-0.5">
+                {posts.filter(p => p.media_type === 'video').map(post => (
+                  <Link key={post.id} to={`/post/${post.id}`} className="aspect-[9/16] relative group bg-black">
+                    <video
+                      src={post.media_url}
+                      className="w-full h-full object-cover"
+                      muted
+                      playsInline
+                    />
+                    <Film className="absolute top-1.5 right-1.5 size-4 text-white drop-shadow" />
+                  </Link>
+                ))}
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="saved">
             {isOwner ? (
-              <Empty className="mt-12">
-                <EmptyHeader>
-                  <EmptyTitle>No saved posts</EmptyTitle>
-                  <EmptyDescription>Posts you save will appear here.</EmptyDescription>
-                </EmptyHeader>
-              </Empty>
+              savedPosts.length === 0 ? (
+                <Empty className="mt-12">
+                  <EmptyHeader>
+                    <EmptyTitle>No saved posts</EmptyTitle>
+                    <EmptyDescription>Posts you bookmark will appear here.</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              ) : (
+                <div className="grid grid-cols-3 gap-0.5">
+                  {savedPosts.map(post => (
+                    <Link key={post.id} to={`/post/${post.id}`} className="aspect-square relative group">
+                      <img
+                        src={post.media_url}
+                        alt=""
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                      />
+                      {post.media_type === 'video' && (
+                        <Film className="absolute top-1 right-1 size-4 text-white fill-current" />
+                      )}
+                    </Link>
+                  ))}
+                </div>
+              )
             ) : (
               <Empty className="mt-12">
                 <EmptyHeader>
                   <EmptyTitle>This section is private</EmptyTitle>
+                  <EmptyDescription>Only {profile.username} can see saved posts.</EmptyDescription>
                 </EmptyHeader>
               </Empty>
             )}
