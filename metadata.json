@@ -1,0 +1,6 @@
+{
+  "name": "Yomy",
+  "description": "A social photo and video sharing and messaging platform with feed, stories, explore, direct messaging, and user profiles.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
